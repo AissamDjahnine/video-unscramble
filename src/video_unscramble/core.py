@@ -10,6 +10,10 @@ import torch
 from torchvision import models, transforms
 from torchvision.models.feature_extraction import create_feature_extractor
 from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.decomposition import PCA
+from sklearn.ensemble import IsolationForest
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
 
 
 INVALID_SCORE = -1e6
@@ -67,6 +71,79 @@ def compute_histogram_features(frames: List[np.ndarray], bins: int = 64, resize:
         features[idx] = hist
     return features
 
+
+def compute_frame_embeddings(
+    frames: List[np.ndarray],
+    bins: int = 32,
+    resize: Tuple[int, int] = (256, 256),
+) -> np.ndarray:
+    """
+    Build richer frame descriptors for clustering and outlier detection.
+
+    The descriptor mixes coarse appearance, color distribution, edge structure,
+    and low-order image statistics. This is still lightweight, but much more
+    discriminative than a single grayscale histogram.
+    """
+    embeddings = []
+    for frame in frames:
+        resized = cv2.resize(frame, resize) if resize is not None else frame
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
+
+        gray_hist = cv2.normalize(
+            cv2.calcHist([gray], [0], None, [bins], [0, 256]),
+            None,
+        ).flatten()
+        sat_hist = cv2.normalize(
+            cv2.calcHist([hsv], [1], None, [bins], [0, 256]),
+            None,
+        ).flatten()
+        val_hist = cv2.normalize(
+            cv2.calcHist([hsv], [2], None, [bins], [0, 256]),
+            None,
+        ).flatten()
+
+        edges = cv2.Canny(gray, 80, 160)
+        edge_hist = cv2.normalize(
+            cv2.calcHist([edges], [0], None, [8], [0, 256]),
+            None,
+        ).flatten()
+
+        stats = np.array(
+            [
+                float(gray.mean()),
+                float(gray.std()),
+                float(hsv[..., 0].mean()),
+                float(hsv[..., 1].mean()),
+                float(hsv[..., 2].mean()),
+                float(edges.mean() / 255.0),
+                float(cv2.Laplacian(gray, cv2.CV_32F).var()),
+            ],
+            dtype=np.float32,
+        )
+        embeddings.append(np.concatenate([gray_hist, sat_hist, val_hist, edge_hist, stats]))
+
+    return np.asarray(embeddings, dtype=np.float32)
+
+
+def reduce_frame_embeddings(features: np.ndarray, max_components: int = 24) -> np.ndarray:
+    """
+    Standardize and compress frame descriptors before clustering.
+    """
+    if features.size == 0:
+        return features
+
+    scaled = StandardScaler().fit_transform(features)
+    if len(features) < 3:
+        return scaled.astype(np.float32)
+
+    n_components = min(max_components, scaled.shape[1], len(features) - 1)
+    if n_components < 2:
+        return scaled.astype(np.float32)
+
+    reduced = PCA(n_components=n_components, random_state=42).fit_transform(scaled)
+    return reduced.astype(np.float32)
+
 def cluster_frames(features: np.ndarray, n_clusters: int, max_iter: int = 300, mini: bool = True) -> np.ndarray:
     """
     Cluster frames using K-Means or MiniBatchKMeans.
@@ -81,25 +158,49 @@ def cluster_frames(features: np.ndarray, n_clusters: int, max_iter: int = 300, m
         Array of cluster labels for each frame.
     """
 
-    if not mini:
-        km = KMeans(n_clusters=n_clusters, n_init=10, max_iter=max_iter, random_state=42)
-        labels = km.fit_predict(features)
-    else:
-        kmeans = MiniBatchKMeans(
-            n_clusters=n_clusters,
-            init="k-means++",
-            n_init=1,      
-            max_iter=100,   
-            tol=1e-4,
-            batch_size=256,
-            random_state=42,
-            verbose=1,
-        )
-        for _ in tqdm(range(max_iter), desc="Clustering"):
-            kmeans.partial_fit(features)
-        labels = kmeans.predict(features)
+    if len(features) == 0:
+        return np.array([], dtype=np.int32)
 
-    return labels
+    reduced = reduce_frame_embeddings(features)
+    n_clusters = max(1, min(n_clusters, len(reduced)))
+
+    if len(reduced) < n_clusters + 1:
+        labels = np.zeros(len(reduced), dtype=np.int32)
+    else:
+        gmm = GaussianMixture(
+            n_components=n_clusters,
+            covariance_type="full",
+            reg_covar=1e-5,
+            random_state=42,
+            max_iter=max_iter,
+            n_init=3,
+        )
+        labels = gmm.fit_predict(reduced)
+        probs = gmm.predict_proba(reduced).max(axis=1)
+        low_confidence = probs < np.quantile(probs, 0.1)
+        labels = labels.astype(np.int32)
+        labels[low_confidence] = -1
+
+    non_outliers = labels[labels != -1]
+    if non_outliers.size == 0:
+        return labels
+
+    dominant_label = int(np.bincount(non_outliers).argmax())
+    dominant_mask = labels == dominant_label
+
+    dominant_features = reduced[dominant_mask]
+    if len(dominant_features) >= 8:
+        contamination = min(0.2, max(0.03, 2.0 / len(dominant_features)))
+        detector = IsolationForest(
+            n_estimators=200,
+            contamination=contamination,
+            random_state=42,
+        )
+        inlier_flags = detector.fit_predict(dominant_features)
+        dominant_indices = np.where(dominant_mask)[0]
+        labels[dominant_indices[inlier_flags == -1]] = -1
+
+    return labels.astype(np.int32)
 
 def filter_clusters(frames: List[np.ndarray], labels: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray], List[int], List[int], Optional[int]]:
     """

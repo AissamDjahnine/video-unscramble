@@ -36,10 +36,20 @@ def generate_plotly_visualization(frames, labels, output_html, image_paths=None)
     Returns:
         None. Saves an HTML file with interactive plot.
     """
-    cluster_labels = {"Cluster 0": "Outliers",
-                     "Cluster 1": "Inliers"}
-    cluster_colors = {"Cluster 0": "#FF4B6D",
-                     "Cluster 1": "#00D4AA"}
+    cluster_names = {
+        -1: "Outliers",
+        0: "Cluster 0",
+        1: "Cluster 1",
+        2: "Cluster 2",
+        3: "Cluster 3",
+    }
+    cluster_palette = {
+        -1: "#FF4B6D",
+        0: "#00D4AA",
+        1: "#1D9BF0",
+        2: "#FFB703",
+        3: "#7C3AED",
+    }
     
     feats = compute_histogram_features(frames, 
                                        bins=64,
@@ -68,15 +78,14 @@ def generate_plotly_visualization(frames, labels, output_html, image_paths=None)
     fig = go.Figure()
     for c in sorted(df.cluster.unique()):
         d = df[df.cluster == c]
-        cluster_key = f"Cluster {c}"
         fig.add_trace(go.Scatter(
             x=d.x, y=d.y,
             mode="markers",
-            name=cluster_labels[cluster_key],
+            name=cluster_names.get(int(c), f"Cluster {int(c)}"),
             marker=dict(
                 size=12,
                 opacity=0.85,
-                color=cluster_colors[cluster_key],
+                color=cluster_palette.get(int(c), "#6B7280"),
                 line=dict(width=2, color='white'),
                 symbol='circle'
             ),

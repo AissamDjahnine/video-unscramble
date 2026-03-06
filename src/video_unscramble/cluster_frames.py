@@ -2,7 +2,7 @@ import argparse
 import os
 from .core import (
     extract_frames,
-    compute_histogram_features,
+    compute_frame_embeddings,
     cluster_frames,
     filter_clusters,
     save_frames,
@@ -36,8 +36,8 @@ def main(argv=None) -> None:
     print(f"Extracted {n_frames} frames.")
 
     resize_dim = None if (args.resize[0] == 0 or args.resize[1] == 0) else tuple(args.resize)
-    print("Computing histogram features…")
-    features = compute_histogram_features(frames, bins=args.bins, resize=resize_dim)
+    print("Computing multi-modal frame embeddings…")
+    features = compute_frame_embeddings(frames, bins=max(8, args.bins // 2), resize=resize_dim)
     print(f"Computed features for {n_frames} frames.")
 
     labels = cluster_frames(
@@ -57,7 +57,7 @@ def main(argv=None) -> None:
     inliers, outliers, inlier_idx, outlier_idx, dominant_label = filter_clusters(frames, labels)
     print(
         f"Dominant cluster label: {dominant_label if dominant_label is not None else 'None'} "
-        f"– {len(inliers)} inliers, {len(outliers)} outliers."
+        f"– {len(inliers)} inliers, {len(outliers)} outliers after probabilistic clustering and outlier removal."
     )
 
     save_frames(frames, list(range(n_frames)), orig_dir)
