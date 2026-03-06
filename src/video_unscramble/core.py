@@ -469,6 +469,114 @@ def match_resnet_spatial_pair(feat0: torch.Tensor, feat1: torch.Tensor, ratio_th
     disp = np.linalg.norm(coords0 - coords1, axis=1)
     return match_count, float(np.median(disp))
 
+
+def compute_spatial_saliency_weights(feats: List[torch.Tensor], keep_ratio: float = 0.35) -> np.ndarray:
+    """
+    Estimate which spatial locations are informative across the frame set.
+
+    Static background regions are common failure points for scene-level matching.
+    This function keeps the spatial cells whose feature activations vary the most
+    across frames, which tends to emphasize moving or semantically changing
+    regions over static walls, logos, and borders.
+    """
+    if not feats:
+        return np.array([], dtype=np.float32)
+
+    stacked = torch.stack(feats, dim=0)
+    location_variance = stacked.var(dim=0, unbiased=False).mean(dim=0).cpu().numpy()
+    flat = location_variance.reshape(-1)
+    if flat.size == 0:
+        return flat.astype(np.float32)
+
+    keep = max(8, int(flat.size * keep_ratio))
+    if keep >= flat.size:
+        mask = np.ones_like(flat, dtype=np.float32)
+    else:
+        top_idx = np.argpartition(flat, -keep)[-keep:]
+        mask = np.zeros_like(flat, dtype=np.float32)
+        mask[top_idx] = 1.0
+
+    selected = flat[mask > 0]
+    if selected.size:
+        lo = float(selected.min())
+        hi = float(selected.max())
+        if hi > lo:
+            mask[mask > 0] = 0.25 + 0.75 * ((selected - lo) / (hi - lo))
+        else:
+            mask[mask > 0] = 1.0
+    return mask.astype(np.float32)
+
+
+def weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """
+    Compute a weighted median for non-negative weights.
+    """
+    if values.size == 0:
+        return float("nan")
+    order = np.argsort(values)
+    values = values[order]
+    weights = weights[order]
+    total = weights.sum()
+    if total <= 0:
+        return float(np.median(values))
+    cdf = np.cumsum(weights)
+    idx = np.searchsorted(cdf, 0.5 * total, side="left")
+    idx = min(idx, len(values) - 1)
+    return float(values[idx])
+
+
+def match_resnet_spatial_pair_weighted(
+    feat0: torch.Tensor,
+    feat1: torch.Tensor,
+    spatial_weights: np.ndarray,
+    ratio_thresh: float = 0.75,
+) -> Tuple[float, float]:
+    """
+    Match ResNet spatial features while suppressing static background regions.
+
+    Returns a weighted match score and a weighted median displacement.
+    """
+    c, h, w = feat0.shape
+    desc0 = feat0.reshape(c, -1).T
+    desc1 = feat1.reshape(c, -1).T
+    active = spatial_weights > 0
+    if active.sum() < 2:
+        return match_resnet_spatial_pair(feat0, feat1, ratio_thresh)
+
+    desc0 = desc0[active]
+    desc1 = desc1[active]
+    weights = spatial_weights[active]
+
+    desc0 = torch.nn.functional.normalize(desc0, dim=1)
+    desc1 = torch.nn.functional.normalize(desc1, dim=1)
+    dists = torch.cdist(desc0, desc1, p=2).cpu().numpy()
+    if dists.shape[1] < 2:
+        return 0.0, float("nan")
+
+    nn_idx = np.argsort(dists, axis=1)[:, :2]
+    nn_d = np.take_along_axis(dists, nn_idx, axis=1)
+    good0 = np.where(nn_d[:, 0] < ratio_thresh * nn_d[:, 1])[0]
+
+    rev_nn = np.argsort(dists, axis=0)[:2, :]
+    matches = []
+    for i in good0:
+        j = nn_idx[i, 0]
+        if i in rev_nn[:, j]:
+            matches.append((i, j))
+
+    if not matches:
+        return 0.0, float("nan")
+
+    active_indices = np.flatnonzero(active)
+    coords0 = np.array([(active_indices[i] // w, active_indices[i] % w) for i, _ in matches], dtype=np.float32)
+    coords1 = np.array([(active_indices[j] // w, active_indices[j] % w) for _, j in matches], dtype=np.float32)
+    disp = np.linalg.norm(coords0 - coords1, axis=1)
+    match_weights = np.array([weights[i] for i, _ in matches], dtype=np.float32)
+    score = float(match_weights.sum())
+    med = weighted_median(disp, match_weights)
+    return score, med
+
+
 def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thresh: float = 0.75, max_workers: int = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ResNet-based feature matches between all frame pairs.
@@ -494,6 +602,8 @@ def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thres
             feat_map = extractor(inp)['feat_map'][0].cpu()
         feats.append(feat_map)
 
+    spatial_weights = compute_spatial_saliency_weights(feats)
+
     n = len(frames)
     match_mat = np.zeros((n, n), dtype=np.float32)
     motion_mat = np.full((n, n), np.nan, dtype=np.float32)
@@ -503,7 +613,7 @@ def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thres
         max_workers = max(1, (os.cpu_count() or 4) - 1)
 
     def worker(i: int, j: int):
-        cnt, med = match_resnet_spatial_pair(feats[i], feats[j], ratio_thresh)
+        cnt, med = match_resnet_spatial_pair_weighted(feats[i], feats[j], spatial_weights, ratio_thresh)
         return i, j, cnt, med
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
