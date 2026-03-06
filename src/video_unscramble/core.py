@@ -742,7 +742,9 @@ def refine_sequence(sequence, score_matrix):
     """
     sequence = two_opt(sequence, score_matrix)
     sequence = smooth_temporal_coherence(sequence, score_matrix)
-    sequence = remove_weak_links(sequence, score_matrix)
+    sequence = remove_weak_links(sequence, score_matrix, drop_thresh=0.2)
+    sequence = insert_missing_frames(sequence, score_matrix)
+    sequence = two_opt(sequence, score_matrix)
     return sequence
 
 
@@ -846,6 +848,47 @@ def remove_weak_links(sequence, score_matrix, drop_thresh=0.3):
         if score >= threshold:
             cleaned.append(curr)
     return cleaned
+
+
+def insert_missing_frames(sequence, score_matrix):
+    """
+    Reinsert omitted frames at the best scoring position.
+
+    Cleanup should not permanently reduce coverage. If a frame is dropped by a
+    conservative weak-link pass, insert it back where it hurts the sequence the
+    least or improves it the most.
+    """
+    n = score_matrix.shape[0]
+    if n == 0:
+        return []
+    if not sequence:
+        return list(range(n))
+
+    seq = sequence.copy()
+    present = set(seq)
+    missing = [idx for idx in range(n) if idx not in present]
+
+    for node in missing:
+        best_pos = len(seq)
+        best_gain = -np.inf
+
+        for pos in range(len(seq) + 1):
+            if pos == 0:
+                gain = float(score_matrix[node, seq[0]])
+            elif pos == len(seq):
+                gain = float(score_matrix[seq[-1], node])
+            else:
+                left = seq[pos - 1]
+                right = seq[pos]
+                gain = float(score_matrix[left, node] + score_matrix[node, right] - score_matrix[left, right])
+
+            if gain > best_gain:
+                best_gain = gain
+                best_pos = pos
+
+        seq.insert(best_pos, node)
+
+    return seq
 
 def total_sequence_score(sequence, score_matrix):
     """
