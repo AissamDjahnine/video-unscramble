@@ -577,7 +577,12 @@ def match_resnet_spatial_pair_weighted(
     return score, med
 
 
-def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thresh: float = 0.75, max_workers: int = None) -> Tuple[np.ndarray, np.ndarray]:
+def compute_feature_matches_ResNet_spatial(
+    frames: List[np.ndarray],
+    ratio_thresh: float = 0.75,
+    max_workers: int = None,
+    saliency_weighting: bool = False,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute ResNet-based feature matches between all frame pairs.
 
@@ -602,7 +607,7 @@ def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thres
             feat_map = extractor(inp)['feat_map'][0].cpu()
         feats.append(feat_map)
 
-    spatial_weights = compute_spatial_saliency_weights(feats)
+    spatial_weights = compute_spatial_saliency_weights(feats) if saliency_weighting else None
 
     n = len(frames)
     match_mat = np.zeros((n, n), dtype=np.float32)
@@ -613,7 +618,10 @@ def compute_feature_matches_ResNet_spatial(frames: List[np.ndarray], ratio_thres
         max_workers = max(1, (os.cpu_count() or 4) - 1)
 
     def worker(i: int, j: int):
-        cnt, med = match_resnet_spatial_pair_weighted(feats[i], feats[j], spatial_weights, ratio_thresh)
+        if saliency_weighting and spatial_weights is not None:
+            cnt, med = match_resnet_spatial_pair_weighted(feats[i], feats[j], spatial_weights, ratio_thresh)
+        else:
+            cnt, med = match_resnet_spatial_pair(feats[i], feats[j], ratio_thresh)
         return i, j, cnt, med
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:

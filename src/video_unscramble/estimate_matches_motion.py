@@ -19,6 +19,7 @@ def main(argv=None):
     parser.add_argument('--descr', default='RESNET', choices=['AKAZE','SIFT','ORB','RESNET','COMBO'], help='Descriptor to use')
     parser.add_argument('--ratio_thresh', type=float, default=0.75, help='Lowe ratio for ResNet spatial')
     parser.add_argument('--alpha', type=float, default=0.5, help='Weight for global/local combine')
+    parser.add_argument('--resnet-saliency', action='store_true', help='Enable experimental saliency-weighted ResNet matching')
     args = parser.parse_args(argv)
 
     frame_paths = sorted(glob.glob(os.path.join(args.input_dir, '*.jpg')))
@@ -27,13 +28,20 @@ def main(argv=None):
     frames = [cv2.imread(p) for p in frame_paths]
 
     if args.descr == 'RESNET':
-        match_matrix, motion_matrix = compute_feature_matches_ResNet_spatial(frames, ratio_thresh=args.ratio_thresh)
+        match_matrix, motion_matrix = compute_feature_matches_ResNet_spatial(
+            frames,
+            ratio_thresh=args.ratio_thresh,
+            saliency_weighting=args.resnet_saliency,
+        )
     elif args.descr == 'AKAZE':
         match_matrix, motion_matrix = compute_feature_matches_AKAZE(frames)
     elif args.descr == 'SIFT':
         match_matrix, motion_matrix = compute_feature_matches_SIFT(frames)
     elif args.descr == 'COMBO':
-        g_scores, g_motion = compute_feature_matches_ResNet_spatial(frames)
+        g_scores, g_motion = compute_feature_matches_ResNet_spatial(
+            frames,
+            saliency_weighting=args.resnet_saliency,
+        )
         l_counts, l_motion = compute_feature_matches_AKAZE(frames)
         
         match_matrix = combine_global_local(g_scores, l_counts, args.alpha)
