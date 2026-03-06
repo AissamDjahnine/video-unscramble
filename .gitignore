@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .venv/
+*.egg-info/
 
 results/
 results_multiple_videos/

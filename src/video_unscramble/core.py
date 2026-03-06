@@ -9,7 +9,10 @@ from PIL import Image
 import torch
 from torchvision import models, transforms
 from torchvision.models.feature_extraction import create_feature_extractor
-from sklearn.cluster import KMeans, MiniBatchKMeans 
+from sklearn.cluster import KMeans, MiniBatchKMeans
+
+
+INVALID_SCORE = -1e6
 
 def extract_frames(video_path: str) -> List[np.ndarray]:
     """
@@ -424,13 +427,160 @@ def combine_global_local(global_scores: np.ndarray, local_counts: np.ndarray, al
         Combined similarity matrix.
     """
 
-    if local_counts.max() > 0:
-        local_norm = local_counts / local_counts.max()
-    else:
-        local_norm = local_counts.copy()
+    global_norm = normalize_similarity_matrix(global_scores)
+    local_norm = normalize_similarity_matrix(local_counts)
+    return alpha * global_norm + (1.0 - alpha) * local_norm
 
-    # Weighted fusion
-    return alpha * global_scores + (1.0 - alpha) * local_norm
+
+def normalize_similarity_matrix(matrix: np.ndarray) -> np.ndarray:
+    """
+    Robustly normalize a similarity matrix to [0, 1].
+
+    Args:
+        matrix: Raw similarity matrix.
+
+    Returns:
+        Normalized matrix with invalid values mapped to 0.
+    """
+    arr = np.asarray(matrix, dtype=np.float32).copy()
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return np.zeros_like(arr, dtype=np.float32)
+
+    values = arr[finite]
+    lo = float(np.percentile(values, 5))
+    hi = float(np.percentile(values, 95))
+    if hi <= lo:
+        hi = float(values.max())
+        lo = float(values.min())
+    if hi <= lo:
+        out = np.zeros_like(arr, dtype=np.float32)
+        out[finite] = 1.0 if hi > 0 else 0.0
+        return out
+
+    out = np.zeros_like(arr, dtype=np.float32)
+    out[finite] = np.clip((arr[finite] - lo) / (hi - lo), 0.0, 1.0)
+    return out
+
+
+def normalize_motion_matrix(matrix: np.ndarray) -> np.ndarray:
+    """
+    Robustly normalize a motion matrix to [0, 1].
+
+    Lower motion is better, but this function only rescales values.
+    Invalid values are treated as maximum motion.
+    """
+    arr = np.asarray(matrix, dtype=np.float32).copy()
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return np.ones_like(arr, dtype=np.float32)
+
+    values = arr[finite]
+    lo = float(np.percentile(values, 5))
+    hi = float(np.percentile(values, 95))
+    if hi <= lo:
+        hi = float(values.max())
+        lo = float(values.min())
+    out = np.ones_like(arr, dtype=np.float32)
+    if hi <= lo:
+        out[finite] = 0.0
+        return out
+
+    out[finite] = np.clip((arr[finite] - lo) / (hi - lo), 0.0, 1.0)
+    return out
+
+
+def build_score_matrix(match_matrix: np.ndarray, motion_matrix: np.ndarray, alpha: float = 0.5) -> np.ndarray:
+    """
+    Build a robust transition score matrix from matches and motion.
+
+    Args:
+        match_matrix: Pairwise similarity counts/scores.
+        motion_matrix: Pairwise displacement estimates.
+        alpha: Motion penalty weight.
+
+    Returns:
+        Score matrix where larger values indicate more likely adjacency.
+    """
+    match_norm = normalize_similarity_matrix(match_matrix)
+    motion_norm = normalize_motion_matrix(motion_matrix)
+    score_matrix = match_norm - alpha * motion_norm
+    np.fill_diagonal(score_matrix, INVALID_SCORE)
+    return score_matrix.astype(np.float32)
+
+
+def select_start_candidates(score_matrix: np.ndarray, max_candidates: int = 8) -> List[int]:
+    """
+    Choose plausible start frames for greedy sequencing.
+
+    Endpoints in a path usually have lower overall connectivity than interior
+    frames, so we seed the search from the weakest-connected frames instead of
+    relying on a symmetric matrix tie.
+    """
+    if score_matrix.shape[0] == 0:
+        return []
+
+    finite = score_matrix > INVALID_SCORE / 10
+    masked = np.where(finite, score_matrix, np.nan)
+    connectivity = np.nanmean(masked, axis=1)
+    connectivity = np.where(np.isfinite(connectivity), connectivity, np.inf)
+    order = np.argsort(connectivity)
+    limit = min(max_candidates, len(order))
+    return order[:limit].astype(int).tolist()
+
+
+def refine_sequence(sequence, score_matrix):
+    """
+    Run local sequence refinements in a stable order.
+    """
+    sequence = two_opt(sequence, score_matrix)
+    sequence = smooth_temporal_coherence(sequence, score_matrix)
+    sequence = remove_weak_links(sequence, score_matrix)
+    return sequence
+
+
+def find_best_sequence(
+    score_matrix: np.ndarray,
+    penalty_weight: float = 35.0,
+    lookahead_weight: float = 0.5,
+    max_starts: int = 8,
+):
+    """
+    Search multiple plausible endpoints and keep the best sequence.
+    """
+    candidates = select_start_candidates(score_matrix, max_candidates=max_starts)
+    if not candidates:
+        return []
+
+    best_sequence = None
+    best_score = -np.inf
+
+    for start_idx in candidates:
+        sequence = greedy_with_lookahead(
+            start_idx=start_idx,
+            score_matrix=score_matrix,
+            penalty_weight=penalty_weight,
+            lookahead_weight=lookahead_weight,
+        )
+        sequence = refine_sequence(sequence, score_matrix)
+        if not sequence:
+            continue
+
+        direct_score = total_sequence_score(sequence, score_matrix)
+        reverse_sequence = sequence[::-1]
+        reverse_score = total_sequence_score(reverse_sequence, score_matrix)
+
+        if reverse_score > direct_score:
+            sequence = reverse_sequence
+            candidate_score = reverse_score
+        else:
+            candidate_score = direct_score
+
+        if candidate_score > best_score:
+            best_sequence = sequence
+            best_score = candidate_score
+
+    return best_sequence if best_sequence is not None else []
 
 def smooth_temporal_coherence(sequence, score_matrix, passes=2):
     """
@@ -467,13 +617,21 @@ def remove_weak_links(sequence, score_matrix, drop_thresh=0.3):
     Returns:
         Pruned sequence.
     """
+    if not sequence:
+        return []
+
     cleaned = [sequence[0]]
     for i in range(1, len(sequence)):
         prev = cleaned[-1]
         curr = sequence[i]
         score = score_matrix[prev, curr]
-        avg = np.nanmean(score_matrix[prev])
-        if score >= drop_thresh * avg:
+        neighbor_scores = score_matrix[prev]
+        valid_neighbors = neighbor_scores[neighbor_scores > INVALID_SCORE / 10]
+        if valid_neighbors.size == 0:
+            continue
+        baseline = float(np.quantile(valid_neighbors, 0.6))
+        threshold = drop_thresh * baseline
+        if score >= threshold:
             cleaned.append(curr)
     return cleaned
 
@@ -594,4 +752,3 @@ def reconstruct_video(frames: List[np.ndarray], indices_order: List[int], output
     for idx in indices_order:
         writer.write(frames[idx])
     writer.release()
-

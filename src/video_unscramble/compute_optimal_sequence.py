@@ -2,11 +2,8 @@ import argparse
 import numpy as np
 
 from .core import (
-    smooth_temporal_coherence,
-    remove_weak_links,
-    total_sequence_score,
-    two_opt,
-    greedy_with_lookahead,
+    build_score_matrix,
+    find_best_sequence,
 )
 
 def main(argv=None):
@@ -22,22 +19,17 @@ def main(argv=None):
     match_matrix = data["matches"]
     motion_matrix = data["motion"] if "motion" in data else np.zeros_like(match_matrix)
 
-    score_matrix = match_matrix - args.alpha * motion_matrix
-
-    score_matrix[~np.isfinite(score_matrix)] = -1e6
-    
-    sequence = greedy_with_lookahead(
-        start_idx=np.argmax(score_matrix.sum(axis=1) - score_matrix.sum(axis=0)),
+    score_matrix = build_score_matrix(match_matrix, motion_matrix, alpha=args.alpha)
+    sequence = find_best_sequence(
         score_matrix=score_matrix,
         penalty_weight=35,
-        lookahead_weight=0.5
+        lookahead_weight=0.5,
+        max_starts=min(8, score_matrix.shape[0]),
     )
-    
-    sequence = two_opt(sequence, score_matrix)
-    sequence = smooth_temporal_coherence(sequence, score_matrix)
-    sequence = remove_weak_links(sequence, score_matrix)
+    if not sequence:
+        raise ValueError("Failed to recover a valid frame sequence.")
 
-    np.save(args.output, np.array(sequence[::-1], dtype=np.int32))
+    np.save(args.output, np.array(sequence, dtype=np.int32))
     print(f"Saved reordered sequence of {len(sequence)} frames to {args.output}")
 
 if __name__ == "__main__":
