@@ -1,6 +1,6 @@
-# Video Frame Unscrambler
+# Video Unscramble (Interview Technical Test)
 
-> AI Engineer technical test solution for Digeiz.
+> AI Engineer technical test solution for Digeiz. One-week implementation.
 
 ## Problem
 
@@ -52,14 +52,21 @@ done
 | Input | AKAZE | SIFT | RESNET | COMBO |
 | --- | --- | --- | --- | --- |
 | ![Input](docs/assets/gifs/input.gif) | ![AKAZE](docs/assets/gifs/akaze.gif) | ![SIFT](docs/assets/gifs/sift.gif) | ![RESNET](docs/assets/gifs/resnet.gif) | ![COMBO](docs/assets/gifs/combo.gif) |
-| Input video | [Outlier view](results/AKAZE/clustering_tsne.html) | [Outlier view](results/SIFT/clustering_tsne.html) | [Outlier view](results/RESNET/clustering_tsne.html) | [Outlier view](results/COMBO/clustering_tsne.html) |
 
 Notes:
 
 - `AKAZE` is currently the strongest method on the provided sample.
-- `SIFT` is competitive but less stable.
+- `SIFT` is competitive but also tends to reconstruct the clip in reverse temporal direction on this sample.
 - `RESNET` tends to reconstruct the clip in reverse temporal direction on this sample.
 - `COMBO` also tends to reverse the clip and is currently weaker than `AKAZE`.
+- Interactive t-SNE clustering views are generated locally in each `results/<METHOD>/clustering_tsne.html` file.
+
+## References
+
+- AKAZE: Alcantarilla, Nuevo, Bartoli, "Fast Explicit Diffusion for Accelerated Features in Nonlinear Scale Spaces" (BMVC 2013). [Paper](https://bmva-archive.org.uk/bmvc/2013/Papers/paper0013/index.html)
+- SIFT: Lowe, "Distinctive Image Features from Scale-Invariant Keypoints" (IJCV 2004). [Paper](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf)
+- ResNet: He, Zhang, Ren, Sun, "Deep Residual Learning for Image Recognition" (CVPR 2016). [Paper](https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html)
+- Isolation Forest: Liu, Ting, Zhou, "Isolation Forest" (ICDM 2008). [Reference](https://www.researchgate.net/publication/224384174_Isolation_Forest)
 
 ## Spoiler
 
