@@ -11,6 +11,7 @@ results_multiple_videos/
 videos/
 images/
 *.mp4
+!corrupted_video.mp4
 *.npz
 *.npy
 *.html
