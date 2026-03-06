@@ -1,38 +1,38 @@
-[tool.poetry]
+[project]
 name = "video-unscramble"
 version = "0.1.0"
-description = "Unsupervised pipeline to extract, cluster, match and re‑order frames from a corrupted video."
-authors = ["Aissam Djahnine <dreamerissame@gmail.com>"]
-packages = [{ include = "video_unscramble", from = "src" }]
+description = "Unsupervised pipeline to extract, cluster, match and re-order frames from a corrupted video."
+readme = "README.md"
+requires-python = "==3.10.10"
+authors = [
+  { name = "Aissam Djahnine", email = "dreamerissame@gmail.com" },
+]
+dependencies = [
+  "matplotlib>=3.10.3,<4.0.0",
+  "numpy>=1.19",
+  "opencv-python>=4.10,<5.0",
+  "pandas>=2.3.1,<3.0.0",
+  "pillow>=11.3.0,<12.0.0",
+  "plotly>=6.2.0,<7.0.0",
+  "psutil>=7.0.0,<8.0.0",
+  "rich>=14.1.0,<15.0.0",
+  "scikit-learn>=1.5.2,<2.0.0",
+  "torch>=2.7.0,<3.0.0",
+  "torchmetrics>=1.7.4,<2.0.0",
+  "torchvision>=0.22.0,<1.0.0",
+  "tqdm>=4.67.1,<5.0.0",
+  "typer>=0.16.1,<0.17.0",
+]
 
-[tool.poetry.dependencies]
-python = "3.10.10"
-# OpenCV for video reading/writing and feature extraction
-opencv-python = "^4.10"
-# NumPy for efficient numerical arrays
-numpy = ">=1.19"
-# scikit-learn for clustering
-scikit-learn = "^1.5.2"
-tqdm = "^4.67.1"
-psutil = "^7.0.0"
-plotly = "^6.2.0"
-pandas = "^2.3.1"
-matplotlib = "^3.10.3"
-pillow = "^11.3.0"
-torch = "^2.7.0"
-torchvision = "^0.22.0"
-torchmetrics = "^1.7.4"
-
-[tool.poetry.scripts]
-video-unscramble = "video_unscramble.cli:main"
-
-
-
-[tool.poetry.group.dev.dependencies]
-# Development dependencies (optional).  Add formatting or testing tools here.
-
+[project.scripts]
+video-unscramble = "video_unscramble.cli:app"
 
 [build-system]
-# Use poetry-core to build the package.  Dynamic versioning is optional and removed here for simplicity.
-requires = ["poetry-core", "setuptools"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

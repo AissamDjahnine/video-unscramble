@@ -18,7 +18,7 @@ exit 1
 fi
 
 start_time=$(date +%s)
-if ! PYTHONPATH=src python -m video_unscramble.cli pipeline --method "$METHOD" --input corrupted_video.mp4 --output-dir results --fps 24 --clusters 2 --alpha 0.5 --viz-tsne; then
+if ! /Users/aissam/.local/bin/uv run video-unscramble pipeline --method "$METHOD" --input corrupted_video.mp4 --output-dir results --fps 24 --clusters 2 --alpha 0.5 --viz-tsne; then
 echo "Error: Pipeline failed!"
 exit 1
 fi

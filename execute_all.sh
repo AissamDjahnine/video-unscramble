@@ -20,7 +20,7 @@ run_pipeline_for_video() {
   echo "Output: $output_file"
   local start_time=$(date +%s)
 
-  PYTHONPATH=src python -m video_unscramble.cli pipeline \
+  /Users/aissam/.local/bin/uv run video-unscramble pipeline \
     --method "$METHOD" \
     --input "$input_file" \
     --output-dir "$method_results" \
