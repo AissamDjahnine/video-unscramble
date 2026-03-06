@@ -23,8 +23,10 @@ def main(argv=None):
     sequence = find_best_sequence(
         score_matrix=score_matrix,
         penalty_weight=35,
-        lookahead_weight=0.5,
+        lookahead_weight=0.35,
         max_starts=min(8, score_matrix.shape[0]),
+        top_k=min(8, max(3, score_matrix.shape[0] - 1)),
+        beam_width=min(6, max(2, score_matrix.shape[0])),
     )
     if not sequence:
         raise ValueError("Failed to recover a valid frame sequence.")

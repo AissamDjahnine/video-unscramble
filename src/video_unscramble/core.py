@@ -630,6 +630,112 @@ def select_start_candidates(score_matrix: np.ndarray, max_candidates: int = 8) -
     return order[:limit].astype(int).tolist()
 
 
+def build_transition_graph(score_matrix: np.ndarray, top_k: int = 8) -> List[np.ndarray]:
+    """
+    Build a sparse top-k neighbor graph from the dense score matrix.
+
+    Args:
+        score_matrix: Dense transition score matrix.
+        top_k: Number of outgoing candidates to keep per frame.
+
+    Returns:
+        Per-node arrays of candidate next frames sorted by descending score.
+    """
+    n = score_matrix.shape[0]
+    graph: List[np.ndarray] = []
+    for i in range(n):
+        row = score_matrix[i].copy()
+        valid = np.where(row > INVALID_SCORE / 10)[0]
+        valid = valid[valid != i]
+        if valid.size == 0:
+            graph.append(np.array([], dtype=np.int32))
+            continue
+
+        if valid.size > top_k:
+            best = valid[np.argpartition(row[valid], -top_k)[-top_k:]]
+        else:
+            best = valid
+        best = best[np.argsort(row[best])[::-1]]
+        graph.append(best.astype(np.int32))
+    return graph
+
+
+def beam_search_sequence(
+    score_matrix: np.ndarray,
+    start_idx: int,
+    graph: List[np.ndarray],
+    beam_width: int = 6,
+    penalty_weight: float = 35.0,
+    lookahead_weight: float = 0.35,
+):
+    """
+    Decode a frame ordering using beam search on the sparse transition graph.
+
+    Args:
+        score_matrix: Dense transition score matrix.
+        start_idx: Seed frame.
+        graph: Top-k adjacency list.
+        beam_width: Number of partial hypotheses to keep per expansion.
+        penalty_weight: Penalty for abrupt direction reversals.
+        lookahead_weight: Weight for one-step future potential.
+
+    Returns:
+        Best decoded sequence.
+    """
+    n = score_matrix.shape[0]
+    if n == 0:
+        return []
+
+    initial_used = np.zeros(n, dtype=bool)
+    initial_used[start_idx] = True
+    beams = [(0.0, [start_idx], initial_used)]
+
+    for _ in range(1, n):
+        candidates_for_round = []
+        for beam_score, seq, used in beams:
+            last = seq[-1]
+            prev = seq[-2] if len(seq) > 1 else None
+
+            neighbors = [int(j) for j in graph[last] if not used[j]]
+            if not neighbors:
+                fallback = np.where(~used)[0]
+                fallback = fallback[fallback != last]
+                neighbors = fallback.tolist()
+
+            local_expansions = []
+            for nxt in neighbors:
+                transition_score = float(score_matrix[last, nxt])
+                if prev is not None and (last - prev) * (nxt - last) < 0:
+                    transition_score -= penalty_weight
+
+                future_candidates = [int(j) for j in graph[nxt] if not used[j] and j != nxt]
+                if future_candidates:
+                    lookahead = float(np.max(score_matrix[nxt, future_candidates]))
+                else:
+                    remaining = np.where(~used)[0]
+                    remaining = remaining[remaining != nxt]
+                    lookahead = float(np.max(score_matrix[nxt, remaining])) if remaining.size else 0.0
+
+                total = beam_score + transition_score + lookahead_weight * lookahead
+                next_used = used.copy()
+                next_used[nxt] = True
+                local_expansions.append((total, seq + [nxt], next_used))
+
+            if local_expansions:
+                local_expansions.sort(key=lambda item: item[0], reverse=True)
+                candidates_for_round.extend(local_expansions[:beam_width])
+
+        if not candidates_for_round:
+            break
+
+        candidates_for_round.sort(key=lambda item: item[0], reverse=True)
+        beams = candidates_for_round[:beam_width]
+
+    best_score, best_sequence, _ = max(beams, key=lambda item: item[0])
+    _ = best_score
+    return best_sequence
+
+
 def refine_sequence(sequence, score_matrix):
     """
     Run local sequence refinements in a stable order.
@@ -645,6 +751,8 @@ def find_best_sequence(
     penalty_weight: float = 35.0,
     lookahead_weight: float = 0.5,
     max_starts: int = 8,
+    top_k: int = 8,
+    beam_width: int = 6,
 ):
     """
     Search multiple plausible endpoints and keep the best sequence.
@@ -653,13 +761,16 @@ def find_best_sequence(
     if not candidates:
         return []
 
+    graph = build_transition_graph(score_matrix, top_k=top_k)
     best_sequence = None
     best_score = -np.inf
 
     for start_idx in candidates:
-        sequence = greedy_with_lookahead(
-            start_idx=start_idx,
+        sequence = beam_search_sequence(
             score_matrix=score_matrix,
+            start_idx=start_idx,
+            graph=graph,
+            beam_width=beam_width,
             penalty_weight=penalty_weight,
             lookahead_weight=lookahead_weight,
         )
