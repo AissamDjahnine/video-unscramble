@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from time import perf_counter
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from .cluster_frames import main as cluster_main
 from .compute_optimal_sequence import main as sequence_main
@@ -30,9 +32,13 @@ class Method(str, Enum):
     COMBO = "COMBO"
 
 
-def _run_step(title: str, argv: list[str], fn) -> None:
+def _run_step(title: str, argv: list[str], fn) -> float:
+    start = perf_counter()
     console.print(Panel.fit(title, border_style="cyan"))
     fn(argv)
+    duration = perf_counter() - start
+    console.print(f"[green]Completed[/green] {title} in {duration:.1f}s")
+    return duration
 
 
 @app.command()
@@ -65,52 +71,73 @@ def pipeline(
     if viz_tsne:
         cluster_args.append("--viz_tsne")
 
-    _run_step("Step 1/4: Cluster frames", cluster_args, cluster_main)
-    _run_step(
-        "Step 2/4: Estimate matches and motion",
-        [
-            "--input_dir",
-            str(inliers_dir),
-            "--output",
-            str(matches_path),
-            "--descr",
-            method.value,
-        ],
-        match_main,
+    steps = [
+        ("Step 1/4: Cluster frames", cluster_args, cluster_main),
+        (
+            "Step 2/4: Estimate matches and motion",
+            [
+                "--input_dir",
+                str(inliers_dir),
+                "--output",
+                str(matches_path),
+                "--descr",
+                method.value,
+            ],
+            match_main,
+        ),
+        (
+            "Step 3/4: Compute optimal sequence",
+            [
+                "--input",
+                str(matches_path),
+                "--output",
+                str(sequence_path),
+                "--alpha",
+                str(alpha),
+                "--descr",
+                method.value,
+            ],
+            sequence_main,
+        ),
+        (
+            "Step 4/4: Reconstruct video",
+            [
+                "--frames_dir",
+                str(inliers_dir),
+                "--sequence",
+                str(sequence_path),
+                "--output",
+                str(output_video),
+                "--fps",
+                str(fps),
+                "--save-frames-dir",
+                str(save_frames_dir),
+            ],
+            reconstruct_main,
+        ),
+    ]
+
+    total_start = perf_counter()
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
     )
-    _run_step(
-        "Step 3/4: Compute optimal sequence",
-        [
-            "--input",
-            str(matches_path),
-            "--output",
-            str(sequence_path),
-            "--alpha",
-            str(alpha),
-            "--descr",
-            method.value,
-        ],
-        sequence_main,
-    )
-    _run_step(
-        "Step 4/4: Reconstruct video",
-        [
-            "--frames_dir",
-            str(inliers_dir),
-            "--sequence",
-            str(sequence_path),
-            "--output",
-            str(output_video),
-            "--fps",
-            str(fps),
-            "--save-frames-dir",
-            str(save_frames_dir),
-        ],
-        reconstruct_main,
-    )
+
+    with progress:
+        task_id = progress.add_task("Running pipeline", total=len(steps))
+        for title, argv, fn in steps:
+            progress.update(task_id, description=f"Running pipeline: {title}")
+            _run_step(title, argv, fn)
+            progress.advance(task_id)
+
+    total_duration = perf_counter() - total_start
     console.print(
         Panel.fit(
-            f"[bold green]Done[/bold green]\nOutput: {output_video}",
+            f"[bold green]Done[/bold green]\nOutput: {output_video}\nTotal time: {total_duration:.1f}s",
             border_style="green",
         )
     )

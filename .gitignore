@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 
 results/
+results-new/
 results_multiple_videos/
 videos/
 images/

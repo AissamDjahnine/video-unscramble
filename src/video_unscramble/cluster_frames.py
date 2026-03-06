@@ -27,7 +27,6 @@ def main(argv=None) -> None:
 
     print(f"Reading frames from {args.input}…")
     frames = extract_frames(args.input)
-    image_paths = load_images_from_folder(orig_dir)
     
     n_frames = len(frames)
     if n_frames == 0:
@@ -45,14 +44,6 @@ def main(argv=None) -> None:
         n_clusters=args.clusters,
         max_iter=700,
     )
-    if args.viz_tsne:
-        generate_plotly_visualization(
-            frames,
-            labels,
-            os.path.join(args.output_dir, "clustering_tsne.html"),
-            image_paths=image_paths,
-        )
-
     # Separate into dominant cluster (inliers) and outliers
     inliers, outliers, inlier_idx, outlier_idx, dominant_label = filter_clusters(frames, labels)
     print(
@@ -62,6 +53,15 @@ def main(argv=None) -> None:
 
     save_frames(frames, list(range(n_frames)), orig_dir)
     print(f"Saved {n_frames} original frames to {orig_dir}")
+
+    if args.viz_tsne:
+        image_paths = load_images_from_folder(orig_dir)
+        generate_plotly_visualization(
+            frames,
+            labels,
+            os.path.join(args.output_dir, "clustering_tsne.html"),
+            image_paths=image_paths,
+        )
 
     # Save inliers and outliers
     print(f"Saving inliers {len(inliers)} inliers to {inlier_dir}")
